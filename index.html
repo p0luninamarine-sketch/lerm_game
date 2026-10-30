@@ -1608,10 +1608,12 @@
     const net = { room: "main", pid: null, isHost: true, state: null, timer: null };
     const SESSION_KEY = "courtGameSession";
 
+    const API_BASE = "https://lerm-game-server.onrender.com/";
+
     async function request(url, options) {
       let response;
       try {
-        response = await fetch(url, options);
+        response = await fetch(new URL(url, API_BASE), options);
       } catch {
         throw new Error("Нет связи с сервером. Откройте игру по адресу сайта, а не как файл с компьютера.");
       }
