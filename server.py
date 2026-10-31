@@ -61,6 +61,8 @@ def get_room(code=None):
             finalized=False,
             verdict=None,
             members={},
+            people={},
+            confirmed=False,
             votes=new_votes(),
         )
     return ROOM
@@ -72,6 +74,15 @@ def get_member(room, pid):
     member = room["members"][pid]
     member["seen"] = time.time()
     return member
+
+
+def person_of(room, member):
+    return room["people"].get(member["person"])
+
+
+def member_team(room, member):
+    person = person_of(room, member)
+    return person["team"] if room["confirmed"] and person else None
 
 
 def clean_name(value):
@@ -102,7 +113,13 @@ def snapshot(room, pid):
         p: {c: room["votes"][p][c][pid] for c in CRITERIA if pid in room["votes"][p][c]}
         for p in PLAYERS
     }
-    teams = {p: [m["name"] for m in room["members"].values() if m["team"] == p] for p in PLAYERS}
+    me = room["members"][pid]
+    mine = person_of(room, me)
+    people = [
+        {"id": k, "name": v["name"], "team": v["team"]}
+        for k, v in room["people"].items()
+    ]
+    teams = {p: [v["name"] for v in room["people"].values() if v["team"] == p] for p in PLAYERS}
     return {
         "round": room["round"],
         "finalized": room["finalized"],
@@ -110,8 +127,11 @@ def snapshot(room, pid):
         "isHost": True,
         "memberCount": sum(1 for m in room["members"].values() if time.time() - m["seen"] < ACTIVE_WINDOW),
         "teams": teams,
-        "myTeam": room["members"][pid]["team"],
-        "myName": room["members"][pid]["name"],
+        "confirmed": room["confirmed"],
+        "people": people,
+        "myPerson": me["person"] if mine else None,
+        "myTeam": member_team(room, me),
+        "myName": mine["name"] if mine else "",
         "averages": averages,
         "totals": totals,
         "myVotes": my_votes,
@@ -120,7 +140,7 @@ def snapshot(room, pid):
 
 def prune_members(room):
     now = time.time()
-    for pid in [k for k, m in room["members"].items() if m["team"] is None and now - m["seen"] > 3600]:
+    for pid in [k for k, m in room["members"].items() if now - m["seen"] > 3600 and not person_of(room, m)]:
         del room["members"][pid]
 
 
@@ -130,20 +150,57 @@ def api_join(body):
     if len(room["members"]) >= MAX_MEMBERS:
         raise ApiError(403, "В игре уже максимальное число участников.")
     pid = secrets.token_urlsafe(16)
-    room["members"][pid] = {"name": "", "team": None, "seen": time.time()}
+    room["members"][pid] = {"person": None, "seen": time.time()}
     return {"pid": pid}
 
 
-def api_team(body):
+def api_person(body):
     room = get_room()
     member = get_member(room, body.get("pid"))
-    if room["round"] != 1:
-        raise ApiError(409, "Команды можно выбирать только в первом раунде.")
+    if room["confirmed"]:
+        raise ApiError(409, "Распределение уже подтверждено. Нажмите «Начать сначала», чтобы изменить.")
+    if len(room["people"]) >= MAX_MEMBERS:
+        raise ApiError(403, "Слишком много участников.")
+    name = clean_name(body.get("name"))
+    person_id = secrets.token_urlsafe(6)
+    room["people"][person_id] = {"name": name, "team": None}
+    if body.get("self"):
+        member["person"] = person_id
+    return {}
+
+
+def api_unperson(body):
+    room = get_room()
+    get_member(room, body.get("pid"))
+    if room["confirmed"]:
+        raise ApiError(409, "Распределение уже подтверждено.")
+    room["people"].pop(body.get("person"), None)
+    return {}
+
+
+def api_assign(body):
+    room = get_room()
+    get_member(room, body.get("pid"))
+    if room["confirmed"]:
+        raise ApiError(409, "Распределение уже подтверждено.")
+    person = room["people"].get(body.get("person"))
+    if person is None:
+        raise ApiError(404, "Участник не найден.")
     team = body.get("team")
-    if team not in PLAYERS:
-        raise ApiError(400, "Выберите героя, которого будете защищать.")
-    member["name"] = clean_name(body.get("name"))
-    member["team"] = team
+    if team is not None and team not in PLAYERS:
+        raise ApiError(400, "Выберите героя.")
+    person["team"] = team
+    return {}
+
+
+def api_confirm(body):
+    room = get_room()
+    get_member(room, body.get("pid"))
+    if room["round"] != 1:
+        raise ApiError(409, "Распределение подтверждается в первом раунде.")
+    if not any(v["team"] for v in room["people"].values()):
+        raise ApiError(409, "Перетащите хотя бы одно имя в зону адвокатов.")
+    room["confirmed"] = True
     return {}
 
 
@@ -156,9 +213,9 @@ def api_vote(body):
     if room["finalized"]:
         raise ApiError(409, "Голосование уже завершено.")
     player, criterion, value = body.get("player"), body.get("criterion"), body.get("value")
-    team = room["members"][pid]["team"]
+    team = member_team(room, room["members"][pid])
     if team is None:
-        raise ApiError(403, "Сначала запишитесь в команду защиты.")
+        raise ApiError(403, "Голосовать можно после подтверждения распределения, если ваше имя стоит в команде.")
     if player != ASSIGNMENTS[team]["jury"] or criterion not in CRITERIA:
         raise ApiError(403, "Ваша команда оценивает защиту другого героя.")
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_SCORE:
@@ -176,6 +233,8 @@ def api_round(body):
     require_host(room, body.get("pid"))
     if body.get("round") != 2:
         raise ApiError(400, "Неверный раунд.")
+    if not room["confirmed"]:
+        raise ApiError(409, "Сначала подтвердите распределение по командам.")
     room["round"] = 2
     return {}
 
@@ -206,16 +265,18 @@ def api_reopen(body):
 def api_reset(body):
     room = get_room()
     require_host(room, body.get("pid"))
-    room.update(round=1, finalized=False, verdict=None, votes=new_votes())
+    room.update(round=1, finalized=False, verdict=None, votes=new_votes(), people={}, confirmed=False)
     for member in room["members"].values():
-        member["team"] = None
-        member["name"] = ""
+        member["person"] = None
     return {}
 
 
 POST_ROUTES = {
     "/api/join": api_join,
-    "/api/team": api_team,
+    "/api/person": api_person,
+    "/api/unperson": api_unperson,
+    "/api/assign": api_assign,
+    "/api/confirm": api_confirm,
     "/api/vote": api_vote,
     "/api/round": api_round,
     "/api/finalize": api_finalize,

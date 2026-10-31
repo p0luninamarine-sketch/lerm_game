@@ -395,6 +395,20 @@
     .roster { margin: 0; padding-left: 20px; min-height: 24px; color: #f8edcf; }
     .roster-empty { color: #bba98a; list-style: none; margin-left: -20px; }
     .team-message { margin: 10px 0 0; color: #f0cf7c; }
+    .team-intro, .team-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+    .team-intro .text-input, .team-add .text-input { flex: 1 1 180px; }
+    .people-pool, .zone { display: flex; flex-wrap: wrap; gap: 8px; align-content: flex-start; min-height: 44px; padding: 8px; border: 2px dashed rgb(234 205 145 / 40%); border-radius: 8px; }
+    .people-pool { margin-top: 12px; }
+    .team-intro[hidden], .team-add[hidden] { display: none; }
+    .zone.over, .people-pool.over { border-color: #ffe071; background: rgb(255 224 113 / 12%); }
+    .zone-hint { color: #bba98a; font-size: .9rem; align-self: center; }
+    .person-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: #f0cf7c; color: #2b1b0e; font-weight: 700; cursor: grab; touch-action: none; user-select: none; }
+    .person-chip.me { outline: 2px solid #fff; }
+    .person-chip.selected { background: #ffe071; box-shadow: 0 0 0 3px #ff9d2e; }
+    .person-chip.ghost { position: fixed; z-index: 100; pointer-events: none; opacity: .9; }
+    .person-chip .x { cursor: pointer; font-weight: 400; opacity: .6; }
+    .team-locked .person-chip { cursor: default; }
+    .reset-game { border-color: #d46a5e; }
     @media (max-width: 700px) { .team-grid { grid-template-columns: 1fr; } }
     .room-bar {
       display: flex;
@@ -787,14 +801,27 @@
       </div>
       <div class="room-bar" id="roomBar" hidden>
         <span id="memberCount"></span>
+        <button class="mode-button reset-game" type="button">Начать сначала</button>
       </div>
       <p class="result-banner round-banner" id="roundBanner"></p>
       <p class="court-help" id="courtHelp" aria-live="polite">Нажмите на имя подсудимого, чтобы начать его ход</p>
       <div class="court-controls">
         <section class="panel team-panel" id="teamPanel" aria-labelledby="teamTitle" hidden>
-          <h2 id="teamTitle">Команды защиты</h2>
-          <p>Впишите своё имя под героем, которого будет защищать ваша команда, и нажмите «Стать адвокатом». Остальные роли назначатся автоматически: защитники одного героя обвиняют и судят двух других.</p>
-          <div class="team-grid" id="teamGrid"></div>
+          <h2 id="teamTitle">Распределение по командам защиты</h2>
+          <div class="team-intro" id="teamIntro">
+            <input class="text-input" id="selfName" type="text" maxlength="24" placeholder="Ваше имя" aria-label="Ваше имя">
+            <button class="start-button" id="selfJoin" type="button">Войти в суд</button>
+          </div>
+          <div id="teamBoard" hidden>
+            <p id="teamHelp">Перетащите имя (или нажмите на имя, затем на зону) в зону адвокатов нужного героя. Когда все расставлены, нажмите «Подтвердить распределение».</p>
+            <div class="people-pool" id="peoplePool" data-zone=""></div>
+            <div class="team-add" id="teamAdd">
+              <input class="text-input" id="otherName" type="text" maxlength="24" placeholder="Имя ещё одного участника" aria-label="Имя ещё одного участника">
+              <button class="mode-button" id="otherJoin" type="button">Добавить ещё одного участника</button>
+            </div>
+            <div class="team-grid" id="teamGrid"></div>
+            <div class="host-actions"><button class="start-button" id="confirmTeams" type="button">Подтвердить распределение</button></div>
+          </div>
           <p class="team-message" id="teamMessage" aria-live="polite"></p>
         </section>
         <div class="round-results" id="roundResults">
@@ -804,7 +831,6 @@
         <div class="host-actions" id="hostActionsCourt" hidden>
           <button class="start-button finalize-votes" type="button">Подвести итоги голосования</button>
           <button class="mode-button reopen-votes" type="button" hidden>Возобновить голосование</button>
-          <button class="mode-button reset-game" type="button" hidden>Начать новую игру</button>
         </div>
         </div>
         <nav class="mode-buttons" aria-label="Режимы игры">
@@ -812,7 +838,7 @@
           <button class="mode-button" type="button" data-mode="jury">Режим суда присяжных</button>
           <button class="mode-button" type="button" data-mode="prosecutor">Режим прокурора</button>
         </nav>
-        <button class="start-button" id="finishRound1" type="button" hidden>Завершить раунд №1 и открыть голосование (для всех)</button>
+        <button class="start-button" id="finishRound1" type="button" hidden>Завершить раунд №1 и открыть голосование</button>
         <p class="result-banner" id="waitHost" hidden></p>
       </div>
     </section>
@@ -870,7 +896,6 @@
         <div class="host-actions" id="hostActionsJury" hidden>
           <button class="start-button finalize-votes" type="button">Подвести итоги голосования</button>
           <button class="mode-button reopen-votes" type="button" hidden>Возобновить голосование</button>
-          <button class="mode-button reset-game" type="button" hidden>Начать новую игру</button>
         </div>
       </div>
     </section>
@@ -1016,7 +1041,7 @@
       const roundOne = round === 1;
       const finalized = Boolean(net.state?.finalized);
       document.getElementById("roundResults").hidden = roundOne;
-      document.getElementById("finishRound1").hidden = !(roundOne && net.isHost);
+      document.getElementById("finishRound1").hidden = !(roundOne && net.state?.confirmed);
       document.getElementById("waitHost").hidden = !(roundOne && !net.isHost);
       document.getElementById("roundBanner").textContent = roundOne
         ? "Раунд №1 — выстраиваем линию защиты и продумываем линию нападения. Доступны режимы адвоката и прокурора."
@@ -1030,7 +1055,6 @@
         box.hidden = roundOne || !net.isHost;
         box.querySelector(".finalize-votes").hidden = finalized;
         box.querySelector(".reopen-votes").hidden = !finalized;
-        box.querySelector(".reset-game").hidden = !finalized;
       });
     }
 
@@ -1077,7 +1101,7 @@
     });
 
     let advocateTeam = null;
-    const NEED_TEAM = "Сначала впишите имя под героем и нажмите «Стать адвокатом».";
+    const NEED_TEAM = "Сначала впишите имя, расставьте участников по командам и подтвердите распределение.";
 
     function teamRosterText(player) {
       const list = net.state?.teams?.[player] || [];
@@ -1608,12 +1632,10 @@
     const net = { room: "main", pid: null, isHost: true, state: null, timer: null };
     const SESSION_KEY = "courtGameSession";
 
-    const API_BASE = "https://lerm-game-server.onrender.com/";
-
     async function request(url, options) {
       let response;
       try {
-        response = await fetch(new URL(url, API_BASE), options);
+        response = await fetch(url, options);
       } catch {
         throw new Error("Нет связи с сервером. Откройте игру по адресу сайта, а не как файл с компьютера.");
       }
@@ -1653,10 +1675,20 @@
       document.getElementById("memberCount").textContent = `Участников: ${state.memberCount}`;
       applyRound();
       renderTeamPanel(state);
+      if (!state.confirmed) {
+        net.entered = false;
+        if (!["library", "map", "court"].includes(currentScreen)) showScreen("court");
+      }
+      else if (!net.entered && state.myTeam && currentScreen === "court") {
+        net.entered = true;
+        openAdvocate();
+      }
       refreshTeamInfo();
       renderCourtScores();
       syncJuryForm();
     }
+
+    const dragState = { active: false, selected: null };
 
     function buildTeamPanel() {
       const grid = document.getElementById("teamGrid");
@@ -1666,61 +1698,156 @@
         card.className = "team-card";
         card.id = `team-card-${player}`;
         const title = document.createElement("h3");
-        title.textContent = `Защита: ${names[player]}`;
-        const roster = document.createElement("ul");
-        roster.className = "roster";
-        roster.id = `roster-${player}`;
-        const input = document.createElement("input");
-        input.className = "text-input team-name";
-        input.type = "text";
-        input.maxLength = 24;
-        input.placeholder = "Ваше имя";
-        input.setAttribute("aria-label", `Ваше имя в команде ${genitiveNames[player]}`);
-        input.value = localStorage.getItem("courtGameName") || "";
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "start-button join-team";
-        button.textContent = "Стать адвокатом";
-        button.addEventListener("click", () => joinTeam(player, input));
-        card.append(title, roster, input, button);
+        title.textContent = `Адвокаты: ${names[player]}`;
+        const zone = document.createElement("div");
+        zone.className = "zone";
+        zone.id = `zone-${player}`;
+        zone.dataset.zone = player;
+        card.append(title, zone);
+        card.addEventListener("click", (event) => { if (!event.target.closest(".person-chip")) moveSelected(player); });
         grid.append(card);
       }
+      const pool = document.getElementById("peoplePool");
+      pool.addEventListener("click", (event) => { if (!event.target.closest(".person-chip")) moveSelected(""); });
+      document.getElementById("selfJoin").addEventListener("click", () => addPerson("selfName", true));
+      document.getElementById("otherJoin").addEventListener("click", () => addPerson("otherName", false));
+      for (const id of ["selfName", "otherName"]) {
+        document.getElementById(id).addEventListener("keydown", (event) => {
+          if (event.key === "Enter") document.getElementById(id === "selfName" ? "selfJoin" : "otherJoin").click();
+        });
+      }
+      document.getElementById("selfName").value = localStorage.getItem("courtGameName") || "";
+      document.getElementById("confirmTeams").addEventListener("click", async () => {
+        try {
+          await api("confirm", { room: net.room, pid: net.pid });
+          await pollState();
+        } catch (error) {
+          document.getElementById("teamMessage").textContent = error.message;
+        }
+      });
+    }
+
+    function teamError(error) {
+      document.getElementById("teamMessage").textContent = error.message;
+    }
+
+    async function addPerson(inputId, isSelf) {
+      const input = document.getElementById(inputId);
+      const name = input.value.trim();
+      if (!name) { teamError(new Error("Введите имя.")); input.focus(); return; }
+      try {
+        await api("person", { room: net.room, pid: net.pid, name, self: isSelf });
+        if (isSelf) localStorage.setItem("courtGameName", name);
+        input.value = isSelf ? name : "";
+        document.getElementById("teamMessage").textContent = "";
+        await pollState();
+      } catch (error) { teamError(error); }
+    }
+
+    async function assignPerson(personId, team) {
+      try {
+        await api("assign", { room: net.room, pid: net.pid, person: personId, team: team || null });
+        dragState.selected = null;
+        await pollState();
+      } catch (error) { teamError(error); }
+    }
+
+    function moveSelected(team) {
+      if (dragState.selected && !net.state?.confirmed) assignPerson(dragState.selected, team);
+    }
+
+    function makeChip(person, state) {
+      const chip = document.createElement("span");
+      chip.className = "person-chip";
+      chip.dataset.person = person.id;
+      chip.textContent = person.name;
+      chip.classList.toggle("me", person.id === state.myPerson);
+      chip.classList.toggle("selected", dragState.selected === person.id);
+      if (state.confirmed) return chip;
+      const remove = document.createElement("span");
+      remove.className = "x";
+      remove.textContent = "✕";
+      remove.title = "Убрать из списка";
+      remove.addEventListener("pointerdown", (event) => event.stopPropagation());
+      remove.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        try { await api("unperson", { room: net.room, pid: net.pid, person: person.id }); await pollState(); } catch (error) { teamError(error); }
+      });
+      chip.append(remove);
+      chip.addEventListener("pointerdown", (event) => startChipDrag(event, chip, person.id));
+      return chip;
+    }
+
+    function startChipDrag(event, chip, personId) {
+      if (event.button > 0) return;
+      const startX = event.clientX, startY = event.clientY;
+      let ghost = null;
+      dragState.active = true;
+      const zoneAt = (x, y) => document.elementFromPoint(x, y)?.closest("[data-zone]");
+      const markZone = (zone) => document.querySelectorAll("[data-zone]").forEach((z) => z.classList.toggle("over", z === zone));
+      const move = (e) => {
+        if (!ghost && Math.hypot(e.clientX - startX, e.clientY - startY) > 6) {
+          ghost = chip.cloneNode(true);
+          ghost.classList.add("ghost");
+          document.body.append(ghost);
+        }
+        if (ghost) {
+          ghost.style.left = `${e.clientX - 20}px`;
+          ghost.style.top = `${e.clientY - 16}px`;
+          markZone(zoneAt(e.clientX, e.clientY));
+        }
+      };
+      const up = (e) => {
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerup", up);
+        document.removeEventListener("pointercancel", up);
+        markZone(null);
+        dragState.active = false;
+        if (ghost) {
+          ghost.remove();
+          const zone = zoneAt(e.clientX, e.clientY);
+          if (zone && e.type === "pointerup") assignPerson(personId, zone.dataset.zone);
+          else if (net.state) renderTeamPanel(net.state);
+        } else {
+          dragState.selected = dragState.selected === personId ? null : personId;
+          if (net.state) renderTeamPanel(net.state);
+        }
+      };
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", up);
+      document.addEventListener("pointercancel", up);
     }
 
     function renderTeamPanel(state) {
       document.getElementById("teamPanel").hidden = false;
+      if (dragState.active) return;
+      const joined = Boolean(state.myPerson);
+      document.getElementById("teamIntro").hidden = joined;
+      document.getElementById("teamBoard").hidden = !joined;
+      document.getElementById("teamPanel").classList.toggle("team-locked", state.confirmed);
+      document.getElementById("teamAdd").hidden = state.confirmed;
+      document.getElementById("confirmTeams").hidden = state.confirmed;
+      document.getElementById("teamHelp").hidden = state.confirmed;
+      const pool = document.getElementById("peoplePool");
+      const waiting = state.people.filter((person) => !person.team);
+      pool.replaceChildren(...(waiting.length
+        ? waiting.map((person) => makeChip(person, state))
+        : [Object.assign(document.createElement("span"), { className: "zone-hint", textContent: state.confirmed ? "" : "Все участники распределены" })]));
       for (const player of players) {
-        const roster = document.getElementById(`roster-${player}`);
-        const members = state.teams[player];
-        roster.replaceChildren(...(members.length
-          ? members.map((name) => Object.assign(document.createElement("li"), { textContent: name }))
-          : [Object.assign(document.createElement("li"), { textContent: "Пока никого", className: "roster-empty" })]));
-        const card = document.getElementById(`team-card-${player}`);
-        card.classList.toggle("mine", state.myTeam === player);
-        card.querySelector(".join-team").disabled = state.round !== 1;
-        card.querySelector(".team-name").disabled = state.round !== 1;
+        const zone = document.getElementById(`zone-${player}`);
+        const members = state.people.filter((person) => person.team === player);
+        zone.replaceChildren(...(members.length
+          ? members.map((person) => makeChip(person, state))
+          : [Object.assign(document.createElement("span"), { className: "zone-hint", textContent: "Перетащите имя сюда" })]));
+        document.getElementById(`team-card-${player}`).classList.toggle("mine", state.myTeam === player);
       }
       const message = document.getElementById("teamMessage");
-      if (state.round !== 1) message.textContent = "Команды сформированы, состав больше менять нельзя.";
-      else if (state.myTeam) message.textContent = `Вы в команде защитников ${genitiveNames[state.myTeam]} (${state.myName}). Можно сменить команду, пока идёт раунд 1.`;
-      else if (message.textContent !== NEED_TEAM) message.textContent = "Впишите имя и выберите героя, которого будете защищать.";
-    }
-
-    async function joinTeam(player, input) {
-      const name = input.value.trim();
-      const message = document.getElementById("teamMessage");
-      if (!name) {
-        message.textContent = "Введите своё имя под выбранным героем.";
-        input.focus();
-        return;
-      }
-      localStorage.setItem("courtGameName", name);
-      try {
-        await api("team", { room: net.room, pid: net.pid, team: player, name });
-        await pollState();
-        openAdvocate();
-      } catch (error) {
-        message.textContent = error.message;
+      if (state.confirmed) {
+        message.textContent = state.myTeam
+          ? `Распределение подтверждено. Вы (${state.myName}) в команде защитников ${genitiveNames[state.myTeam]}.`
+          : joined ? "Распределение подтверждено, но вашего имени нет ни в одной команде. Нажмите «Начать сначала», чтобы распределиться заново." : "Распределение подтверждено.";
+      } else if (message.textContent.startsWith("Распределение подтверждено")) {
+        message.textContent = "";
       }
     }
 
@@ -1752,6 +1879,7 @@
     async function hostAction(action, body = {}) {
       try {
         await api(action, { room: net.room, pid: net.pid, ...body });
+        if (action === "reset") { net.entered = false; dragState.selected = null; showScreen("court"); }
         await pollState();
       } catch (error) {
         document.getElementById("resultBanner").textContent = error.message;
@@ -1768,7 +1896,7 @@
     });
     document.querySelectorAll(".reset-game").forEach((button) => {
       button.addEventListener("click", () => {
-        if (window.confirm("Начать новую игру для всех участников? Оценки и команды будут сброшены, раунд вернётся к первому.")) hostAction("reset");
+        if (window.confirm("Начать сначала для всех участников? Оценки, имена и распределение по командам будут сброшены.")) hostAction("reset");
       });
     });
 
