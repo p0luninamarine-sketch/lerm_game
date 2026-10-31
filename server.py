@@ -62,7 +62,6 @@ def get_room(code=None):
             verdict=None,
             members={},
             people={},
-            confirmed=False,
             votes=new_votes(),
         )
     return ROOM
@@ -82,7 +81,7 @@ def person_of(room, member):
 
 def member_team(room, member):
     person = person_of(room, member)
-    return person["team"] if room["confirmed"] and person else None
+    return person["team"] if person else None
 
 
 def clean_name(value):
@@ -127,7 +126,6 @@ def snapshot(room, pid):
         "isHost": True,
         "memberCount": sum(1 for m in room["members"].values() if time.time() - m["seen"] < ACTIVE_WINDOW),
         "teams": teams,
-        "confirmed": room["confirmed"],
         "people": people,
         "myPerson": me["person"] if mine else None,
         "myTeam": member_team(room, me),
@@ -154,53 +152,22 @@ def api_join(body):
     return {"pid": pid}
 
 
-def api_person(body):
+def api_team(body):
     room = get_room()
     member = get_member(room, body.get("pid"))
-    if room["confirmed"]:
-        raise ApiError(409, "Распределение уже подтверждено. Нажмите «Начать сначала», чтобы изменить.")
-    if len(room["people"]) >= MAX_MEMBERS:
-        raise ApiError(403, "Слишком много участников.")
-    name = clean_name(body.get("name"))
-    person_id = secrets.token_urlsafe(6)
-    room["people"][person_id] = {"name": name, "team": None}
-    if body.get("self"):
-        member["person"] = person_id
-    return {}
-
-
-def api_unperson(body):
-    room = get_room()
-    get_member(room, body.get("pid"))
-    if room["confirmed"]:
-        raise ApiError(409, "Распределение уже подтверждено.")
-    room["people"].pop(body.get("person"), None)
-    return {}
-
-
-def api_assign(body):
-    room = get_room()
-    get_member(room, body.get("pid"))
-    if room["confirmed"]:
-        raise ApiError(409, "Распределение уже подтверждено.")
-    person = room["people"].get(body.get("person"))
-    if person is None:
-        raise ApiError(404, "Участник не найден.")
-    team = body.get("team")
-    if team is not None and team not in PLAYERS:
-        raise ApiError(400, "Выберите героя.")
-    person["team"] = team
-    return {}
-
-
-def api_confirm(body):
-    room = get_room()
-    get_member(room, body.get("pid"))
     if room["round"] != 1:
-        raise ApiError(409, "Распределение подтверждается в первом раунде.")
-    if not any(v["team"] for v in room["people"].values()):
-        raise ApiError(409, "Перетащите хотя бы одно имя в зону адвокатов.")
-    room["confirmed"] = True
+        raise ApiError(409, "Команды можно выбирать только в первом раунде.")
+    team = body.get("team")
+    if team not in PLAYERS:
+        raise ApiError(400, "Выберите героя, которого будете защищать.")
+    name = clean_name(body.get("name"))
+    person = person_of(room, member)
+    if person is None:
+        person_id = secrets.token_urlsafe(6)
+        person = room["people"][person_id] = {"name": name, "team": team}
+        member["person"] = person_id
+    person["name"] = name
+    person["team"] = team
     return {}
 
 
@@ -215,7 +182,7 @@ def api_vote(body):
     player, criterion, value = body.get("player"), body.get("criterion"), body.get("value")
     team = member_team(room, room["members"][pid])
     if team is None:
-        raise ApiError(403, "Голосовать можно после подтверждения распределения, если ваше имя стоит в команде.")
+        raise ApiError(403, "Сначала запишитесь в команду защиты.")
     if player != ASSIGNMENTS[team]["jury"] or criterion not in CRITERIA:
         raise ApiError(403, "Ваша команда оценивает защиту другого героя.")
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_SCORE:
@@ -233,8 +200,6 @@ def api_round(body):
     require_host(room, body.get("pid"))
     if body.get("round") != 2:
         raise ApiError(400, "Неверный раунд.")
-    if not room["confirmed"]:
-        raise ApiError(409, "Сначала подтвердите распределение по командам.")
     room["round"] = 2
     return {}
 
@@ -265,7 +230,7 @@ def api_reopen(body):
 def api_reset(body):
     room = get_room()
     require_host(room, body.get("pid"))
-    room.update(round=1, finalized=False, verdict=None, votes=new_votes(), people={}, confirmed=False)
+    room.update(round=1, finalized=False, verdict=None, votes=new_votes(), people={})
     for member in room["members"].values():
         member["person"] = None
     return {}
@@ -273,10 +238,7 @@ def api_reset(body):
 
 POST_ROUTES = {
     "/api/join": api_join,
-    "/api/person": api_person,
-    "/api/unperson": api_unperson,
-    "/api/assign": api_assign,
-    "/api/confirm": api_confirm,
+    "/api/team": api_team,
     "/api/vote": api_vote,
     "/api/round": api_round,
     "/api/finalize": api_finalize,
