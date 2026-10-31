@@ -5,8 +5,8 @@
 Запуск:   python3 server.py            (порт 8000)
           PORT=80 python3 server.py    (другой порт)
 Регистрация и коды не нужны: игра одна, открытая для всех, кто зашёл по ссылке.
-Команды защиты формируются в зале суда. Раунды, итоги и новую игру может
-запускать любой участник. Состояние хранится в памяти сервера:
+Героя для защиты и обвинения участник выбирает у себя в браузере, присяжные во втором раунде оценивают всех героев.
+Раунды, итоги и новую игру может запускать любой участник. Состояние хранится в памяти сервера:
 после перезапуска сервера игра начинается заново.
 За обратным прокси (nginx, Caddy) работает по обычному HTTPS без доп. настроек.
 """
@@ -22,12 +22,6 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 BASE = Path(__file__).resolve().parent
 PLAYERS = ("pechorin", "azamat", "kazbich")
-# Команда защищает героя-ключ, обвиняет prosecution и оценивает защиту героя jury.
-ASSIGNMENTS = {
-    "azamat": {"prosecution": "pechorin", "jury": "kazbich"},
-    "pechorin": {"prosecution": "kazbich", "jury": "azamat"},
-    "kazbich": {"prosecution": "azamat", "jury": "pechorin"},
-}
 CRITERIA = ("evidence", "persuasion", "answers")
 MAX_SCORE = 5
 MAX_MEMBERS = 150
@@ -54,14 +48,13 @@ def new_votes():
     return {p: {c: {} for c in CRITERIA} for p in PLAYERS}
 
 
-def get_room(code=None):
+def get_room():
     if not ROOM:
         ROOM.update(
             round=1,
             finalized=False,
             verdict=None,
             members={},
-            people={},
             votes=new_votes(),
         )
     return ROOM
@@ -73,22 +66,6 @@ def get_member(room, pid):
     member = room["members"][pid]
     member["seen"] = time.time()
     return member
-
-
-def person_of(room, member):
-    return room["people"].get(member["person"])
-
-
-def member_team(room, member):
-    person = person_of(room, member)
-    return person["team"] if person else None
-
-
-def clean_name(value):
-    name = " ".join(str(value or "").split())[:24]
-    if not name:
-        raise ApiError(400, "Введите своё имя.")
-    return name
 
 
 def totals_of(room):
@@ -112,24 +89,12 @@ def snapshot(room, pid):
         p: {c: room["votes"][p][c][pid] for c in CRITERIA if pid in room["votes"][p][c]}
         for p in PLAYERS
     }
-    me = room["members"][pid]
-    mine = person_of(room, me)
-    people = [
-        {"id": k, "name": v["name"], "team": v["team"]}
-        for k, v in room["people"].items()
-    ]
-    teams = {p: [v["name"] for v in room["people"].values() if v["team"] == p] for p in PLAYERS}
     return {
         "round": room["round"],
         "finalized": room["finalized"],
         "verdict": room["verdict"],
         "isHost": True,
         "memberCount": sum(1 for m in room["members"].values() if time.time() - m["seen"] < ACTIVE_WINDOW),
-        "teams": teams,
-        "people": people,
-        "myPerson": me["person"] if mine else None,
-        "myTeam": member_team(room, me),
-        "myName": mine["name"] if mine else "",
         "averages": averages,
         "totals": totals,
         "myVotes": my_votes,
@@ -138,7 +103,7 @@ def snapshot(room, pid):
 
 def prune_members(room):
     now = time.time()
-    for pid in [k for k, m in room["members"].items() if now - m["seen"] > 3600 and not person_of(room, m)]:
+    for pid in [k for k, m in room["members"].items() if now - m["seen"] > 3600]:
         del room["members"][pid]
 
 
@@ -148,27 +113,8 @@ def api_join(body):
     if len(room["members"]) >= MAX_MEMBERS:
         raise ApiError(403, "В игре уже максимальное число участников.")
     pid = secrets.token_urlsafe(16)
-    room["members"][pid] = {"person": None, "seen": time.time()}
+    room["members"][pid] = {"seen": time.time()}
     return {"pid": pid}
-
-
-def api_team(body):
-    room = get_room()
-    member = get_member(room, body.get("pid"))
-    if room["round"] != 1:
-        raise ApiError(409, "Команды можно выбирать только в первом раунде.")
-    team = body.get("team")
-    if team not in PLAYERS:
-        raise ApiError(400, "Выберите героя, которого будете защищать.")
-    name = clean_name(body.get("name"))
-    person = person_of(room, member)
-    if person is None:
-        person_id = secrets.token_urlsafe(6)
-        person = room["people"][person_id] = {"name": name, "team": team}
-        member["person"] = person_id
-    person["name"] = name
-    person["team"] = team
-    return {}
 
 
 def api_vote(body):
@@ -180,11 +126,8 @@ def api_vote(body):
     if room["finalized"]:
         raise ApiError(409, "Голосование уже завершено.")
     player, criterion, value = body.get("player"), body.get("criterion"), body.get("value")
-    team = member_team(room, room["members"][pid])
-    if team is None:
-        raise ApiError(403, "Сначала запишитесь в команду защиты.")
-    if player != ASSIGNMENTS[team]["jury"] or criterion not in CRITERIA:
-        raise ApiError(403, "Ваша команда оценивает защиту другого героя.")
+    if player not in PLAYERS or criterion not in CRITERIA:
+        raise ApiError(400, "Неизвестный персонаж или критерий.")
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_SCORE:
         raise ApiError(400, f"Оценка должна быть целым числом от 0 до {MAX_SCORE}.")
     room["votes"][player][criterion][pid] = value
@@ -230,15 +173,12 @@ def api_reopen(body):
 def api_reset(body):
     room = get_room()
     require_host(room, body.get("pid"))
-    room.update(round=1, finalized=False, verdict=None, votes=new_votes(), people={})
-    for member in room["members"].values():
-        member["person"] = None
+    room.update(round=1, finalized=False, verdict=None, votes=new_votes())
     return {}
 
 
 POST_ROUTES = {
     "/api/join": api_join,
-    "/api/team": api_team,
     "/api/vote": api_vote,
     "/api/round": api_round,
     "/api/finalize": api_finalize,

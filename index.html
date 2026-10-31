@@ -390,11 +390,9 @@
     .team-panel { margin-bottom: 16px; }
     .team-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
     .team-card { display: grid; align-content: start; gap: 8px; padding: 12px; border: 1px solid rgb(234 205 145 / 35%); border-radius: 8px; background: rgb(31 21 14 / 70%); }
+    .hero-message { margin: 10px 0 0; color: #f0cf7c; }
     .team-card.mine { border-color: #ffe071; box-shadow: 0 0 16px rgb(255 213 77 / 35%); }
     .team-card h3 { margin: 0; color: #f0cf7c; }
-    .roster { margin: 0; padding-left: 20px; min-height: 24px; color: #f8edcf; }
-    .roster-empty { color: #bba98a; list-style: none; margin-left: -20px; }
-    .team-message { margin: 10px 0 0; color: #f0cf7c; }
     .reset-game { border-color: #d46a5e; }
     .reset-box { margin-top: 28px; }
     @media (max-width: 700px) { .team-grid { grid-template-columns: 1fr; } }
@@ -793,11 +791,11 @@
       <p class="result-banner round-banner" id="roundBanner"></p>
       <p class="court-help" id="courtHelp" aria-live="polite">Нажмите на имя подсудимого, чтобы начать его ход</p>
       <div class="court-controls">
-        <section class="panel team-panel" id="teamPanel" aria-labelledby="teamTitle" hidden>
-          <h2 id="teamTitle">Команды защиты</h2>
-          <p>Впишите своё имя под героем, которого будет защищать ваша команда, и нажмите «Стать адвокатом». Остальные роли назначатся автоматически: защитники одного героя обвиняют и судят двух других.</p>
-          <div class="team-grid" id="teamGrid"></div>
-          <p class="team-message" id="teamMessage" aria-live="polite"></p>
+        <section class="panel team-panel" id="heroPanel" aria-labelledby="heroTitle">
+          <h2 id="heroTitle">Выберите героя</h2>
+          <p>Раунд №1: выберите героя, защиту которого вы выстраиваете (режим адвоката), и героя, обвинение которого вы продумываете (режим прокурора). Можно менять выбор в любой момент. Во втором раунде вы будете оценивать всех героев.</p>
+          <div class="team-grid" id="heroGrid"></div>
+          <p class="hero-message" id="heroMessage" aria-live="polite"></p>
         </section>
         <div class="round-results" id="roundResults">
         <div class="panel" id="resultsPanel"></div>
@@ -826,8 +824,7 @@
           <button class="return-court" type="button">Вернуться в суд</button>
         </div>
         <p class="round-instruction" id="advocateInstruction" hidden>Выстрои линию защиты выбранного персонажа по выдвинутым обвинениям.</p>
-        <div class="assignment" id="advocateTeam"></div>
-        <button class="mode-button" id="advocatePromptToggle" type="button" aria-expanded="false" hidden>Наводящие вопросы</button>
+                <button class="mode-button" id="advocatePromptToggle" type="button" aria-expanded="false" hidden>Наводящие вопросы</button>
         <div class="advocate-brief-grid">
           <div id="advocateDetails" aria-live="polite"></div>
           <aside class="advocate-questions" id="advocatePrompts" aria-live="polite" hidden></aside>
@@ -843,7 +840,7 @@
             <button class="return-court" type="button">Вернуться в суд</button>
           </div>
           <p class="round-instruction" id="prosecutorInstruction" hidden>Продумай стратегию обвинения доставшегося тебе персонажа. Тебе могут помочь фразы и вопросы из чек-листа!</p>
-          <div class="assignment" id="prosecutorTeam"></div>
+          <p class="assignment" id="prosecutorTeam"></p>
           <input type="hidden" id="prosecutorDefendant" value="pechorin">
           <p id="prosecutorProgress" aria-live="polite">Подготовка прокурора: 0 из 19</p>
           <div id="prosecutorChecklist"></div>
@@ -1003,11 +1000,6 @@
     ];
     const totalQuestions = prosecutorSections.reduce((sum, section) => sum + section.questions.length, 0);
     const prosecutorChecks = Object.fromEntries(players.map((player) => [player, new Set()]));
-    const assignments = {
-      azamat: { prosecution: "pechorin", jury: "kazbich" },
-      pechorin: { prosecution: "kazbich", jury: "azamat" },
-      kazbich: { prosecution: "azamat", jury: "pechorin" }
-    };
     let currentScreen = "library";
     let activePlayer = null;
 
@@ -1017,7 +1009,8 @@
       const roundOne = round === 1;
       const finalized = Boolean(net.state?.finalized);
       document.getElementById("roundResults").hidden = roundOne;
-      document.getElementById("finishRound1").hidden = !(roundOne && net.isHost);
+      document.getElementById("finishRound1").hidden = !roundOne;
+      document.getElementById("heroPanel").hidden = !roundOne;
       document.getElementById("waitHost").hidden = !(roundOne && !net.isHost);
       document.getElementById("roundBanner").textContent = roundOne
         ? "Раунд №1 — выстраиваем линию защиты и продумываем линию нападения. Доступны режимы адвоката и прокурора."
@@ -1077,46 +1070,63 @@
     });
 
     let advocateTeam = null;
-    const NEED_TEAM = "Сначала впишите имя под героем и нажмите «Стать адвокатом».";
-
-    function teamRosterText(player) {
-      const list = net.state?.teams?.[player] || [];
-      return list.length ? list.join(", ") : "пока никого";
-    }
-
-    function fillBox(id, title, lines) {
-      const box = document.getElementById(id);
-      const strong = document.createElement("strong");
-      strong.textContent = title;
-      box.replaceChildren(strong);
-      lines.forEach((line) => box.append(document.createElement("br"), line));
-    }
-
-    function refreshTeamInfo() {
-      const mine = net.state?.myTeam;
-      if (!mine) return;
-      const role = assignments[mine];
-      fillBox("advocateTeam", `Команда защитников ${genitiveNames[mine]}`, [
-        `В режиме сейчас: ${teamRosterText(mine)}`,
-        `Обвинение: ${names[role.prosecution]} · Суд присяжных: ${names[role.jury]}`
-      ]);
-      fillBox("prosecutorTeam", `Вы обвиняете: ${names[role.prosecution]}`, [`Ваша команда: ${teamRosterText(mine)}`]);
-    }
+    const NEED_HERO = "Сначала выберите героя в блоке «Выберите героя».";
+    const choice = { defend: localStorage.getItem("courtDefend"), prosecute: localStorage.getItem("courtProsecute") };
+    for (const key of Object.keys(choice)) if (!players.includes(choice[key])) choice[key] = null;
 
     function openAdvocate() {
-      const mine = net.state?.myTeam;
-      if (!mine) { document.getElementById("teamMessage").textContent = NEED_TEAM; return; }
-      selectAdvocate(mine);
+      if (!choice.defend) { document.getElementById("heroMessage").textContent = NEED_HERO; return; }
+      selectAdvocate(choice.defend);
       showScreen("advocate");
     }
 
     function openProsecutor() {
-      const mine = net.state?.myTeam;
-      if (!mine) { document.getElementById("teamMessage").textContent = NEED_TEAM; return; }
-      document.getElementById("prosecutorDefendant").value = assignments[mine].prosecution;
+      if (!choice.prosecute) { document.getElementById("heroMessage").textContent = NEED_HERO; return; }
+      document.getElementById("prosecutorDefendant").value = choice.prosecute;
+      document.getElementById("prosecutorTeam").textContent = `Вы обвиняете: ${names[choice.prosecute]}`;
       renderProsecutorChecklist();
-      refreshTeamInfo();
       showScreen("prosecutor");
+    }
+
+    function chooseHero(kind, player) {
+      choice[kind] = player;
+      localStorage.setItem(kind === "defend" ? "courtDefend" : "courtProsecute", player);
+      renderHeroPanel();
+      if (kind === "defend") openAdvocate(); else openProsecutor();
+    }
+
+    function buildHeroPanel() {
+      const grid = document.getElementById("heroGrid");
+      grid.replaceChildren();
+      for (const player of players) {
+        const card = document.createElement("section");
+        card.className = "team-card";
+        card.id = `hero-card-${player}`;
+        const title = document.createElement("h3");
+        title.textContent = names[player];
+        const defend = document.createElement("button");
+        defend.type = "button";
+        defend.className = "start-button choose-defend";
+        defend.addEventListener("click", () => chooseHero("defend", player));
+        const prosecute = document.createElement("button");
+        prosecute.type = "button";
+        prosecute.className = "mode-button choose-prosecute";
+        prosecute.addEventListener("click", () => chooseHero("prosecute", player));
+        card.append(title, defend, prosecute);
+        grid.append(card);
+      }
+      renderHeroPanel();
+    }
+
+    function renderHeroPanel() {
+      for (const player of players) {
+        const card = document.getElementById(`hero-card-${player}`);
+        card.classList.toggle("mine", choice.defend === player);
+        card.querySelector(".choose-defend").textContent = choice.defend === player ? "Вы защищаете этого героя" : "Защищать этого героя";
+        card.querySelector(".choose-prosecute").textContent = choice.prosecute === player ? "Вы обвиняете этого героя" : "Обвинять этого героя";
+      }
+      const message = document.getElementById("heroMessage");
+      if (message.textContent === NEED_HERO && (choice.defend || choice.prosecute)) message.textContent = "";
     }
 
     let audioCtx = null;
@@ -1292,7 +1302,6 @@
       promptButton.textContent = "Наводящие вопросы";
       promptButton.setAttribute("aria-expanded", "false");
       details.replaceChildren(heading, list);
-      refreshTeamInfo();
     }
 
     document.getElementById("advocatePromptToggle").addEventListener("click", (event) => {
@@ -1461,16 +1470,11 @@
       const state = net.state;
       if (!state) return;
       const locked = state.round !== 2 || state.finalized;
-      const target = state.myTeam ? assignments[state.myTeam].jury : null;
-      const allVotes = criteria.length;
+      const allVotes = criteria.length * players.length;
       let rated = 0;
-      document.getElementById("juryIntro").textContent = target
-        ? `Вы — присяжный. Ваша команда оценивает защиту героя: ${names[target]}. Оценки сохраняются сразу, а средние баллы всех присяжных автоматически появляются в зале суда.`
-        : "Сначала запишитесь в команду защиты в зале суда, чтобы стать присяжным.";
+      document.getElementById("juryIntro").textContent =
+        "Вы — присяжный. Оцените выступления защиты всех героев. Оценки сохраняются сразу, а средние баллы всех присяжных автоматически появляются в зале суда.";
       for (const player of players) {
-        const card = document.getElementById(`vote-total-${player}`)?.closest(".juror-card");
-        if (card) card.hidden = player !== target;
-        if (player !== target) continue;
         let total = 0;
         let count = 0;
         for (const criterion of criteria) {
@@ -1595,7 +1599,6 @@
         const mode = button.dataset.mode;
         if (mode === "advocate") return openAdvocate();
         if (mode === "prosecutor") return openProsecutor();
-        if (!net.state?.myTeam) { document.getElementById("teamMessage").textContent = NEED_TEAM; return; }
         syncJuryForm();
         showScreen(mode);
       });
@@ -1650,76 +1653,8 @@
       document.getElementById("roomBar").hidden = false;
       document.getElementById("memberCount").textContent = `Участников: ${state.memberCount}`;
       applyRound();
-      renderTeamPanel(state);
-      refreshTeamInfo();
       renderCourtScores();
       syncJuryForm();
-    }
-
-    function buildTeamPanel() {
-      const grid = document.getElementById("teamGrid");
-      grid.replaceChildren();
-      for (const player of players) {
-        const card = document.createElement("section");
-        card.className = "team-card";
-        card.id = `team-card-${player}`;
-        const title = document.createElement("h3");
-        title.textContent = `Защита: ${names[player]}`;
-        const roster = document.createElement("ul");
-        roster.className = "roster";
-        roster.id = `roster-${player}`;
-        const input = document.createElement("input");
-        input.className = "text-input team-name";
-        input.type = "text";
-        input.maxLength = 24;
-        input.placeholder = "Ваше имя";
-        input.setAttribute("aria-label", `Ваше имя в команде ${genitiveNames[player]}`);
-        input.value = localStorage.getItem("courtGameName") || "";
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "start-button join-team";
-        button.textContent = "Стать адвокатом";
-        button.addEventListener("click", () => joinTeam(player, input));
-        card.append(title, roster, input, button);
-        grid.append(card);
-      }
-    }
-
-    function renderTeamPanel(state) {
-      document.getElementById("teamPanel").hidden = false;
-      for (const player of players) {
-        const roster = document.getElementById(`roster-${player}`);
-        const members = state.teams[player];
-        roster.replaceChildren(...(members.length
-          ? members.map((name) => Object.assign(document.createElement("li"), { textContent: name }))
-          : [Object.assign(document.createElement("li"), { textContent: "Пока никого", className: "roster-empty" })]));
-        const card = document.getElementById(`team-card-${player}`);
-        card.classList.toggle("mine", state.myTeam === player);
-        card.querySelector(".join-team").disabled = state.round !== 1;
-        card.querySelector(".team-name").disabled = state.round !== 1;
-      }
-      const message = document.getElementById("teamMessage");
-      if (state.round !== 1) message.textContent = "Команды сформированы, состав больше менять нельзя.";
-      else if (state.myTeam) message.textContent = `Вы в команде защитников ${genitiveNames[state.myTeam]} (${state.myName}). Можно сменить команду, пока идёт раунд 1.`;
-      else if (message.textContent !== NEED_TEAM) message.textContent = "Впишите имя и выберите героя, которого будете защищать.";
-    }
-
-    async function joinTeam(player, input) {
-      const name = input.value.trim();
-      const message = document.getElementById("teamMessage");
-      if (!name) {
-        message.textContent = "Введите своё имя под выбранным героем.";
-        input.focus();
-        return;
-      }
-      localStorage.setItem("courtGameName", name);
-      try {
-        await api("team", { room: net.room, pid: net.pid, team: player, name });
-        await pollState();
-        openAdvocate();
-      } catch (error) {
-        message.textContent = error.message;
-      }
     }
 
     async function connect() {
@@ -1773,7 +1708,7 @@
 
     applyRound();
     buildJuryForm();
-    buildTeamPanel();
+    buildHeroPanel();
   </script>
 </body>
 </html>
