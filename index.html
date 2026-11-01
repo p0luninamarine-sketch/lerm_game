@@ -793,7 +793,7 @@
       <div class="court-controls">
         <section class="panel team-panel" id="heroPanel" aria-labelledby="heroTitle">
           <h2 id="heroTitle">Выберите героя</h2>
-          <p>Раунд №1: выберите героя, защиту которого вы выстраиваете (режим адвоката), и героя, обвинение которого вы продумываете (режим прокурора). Можно менять выбор в любой момент. Во втором раунде вы будете оценивать всех героев.</p>
+          <p id="heroPanelText">Раунд №1: выберите героя, защиту которого вы выстраиваете (режим адвоката), и героя, обвинение которого вы продумываете (режим прокурора). Можно менять выбор в любой момент. Раунд №2: нажимайте «Судить героя», чтобы открыть голосование за выбранного персонажа.</p>
           <div class="team-grid" id="heroGrid"></div>
           <p class="hero-message" id="heroMessage" aria-live="polite"></p>
         </section>
@@ -1010,7 +1010,7 @@
       const finalized = Boolean(net.state?.finalized);
       document.getElementById("roundResults").hidden = roundOne;
       document.getElementById("finishRound1").hidden = !roundOne;
-      document.getElementById("heroPanel").hidden = !roundOne;
+      document.getElementById("heroPanel").hidden = false;
       document.getElementById("waitHost").hidden = !(roundOne && !net.isHost);
       document.getElementById("roundBanner").textContent = roundOne
         ? "Раунд №1 — выстраиваем линию защиты и продумываем линию нападения. Доступны режимы адвоката и прокурора."
@@ -1019,6 +1019,11 @@
       jury.disabled = roundOne;
       jury.title = roundOne ? "Станет доступен в следующем раунде" : "";
       ["advocateInstruction", "prosecutorInstruction"].forEach((id) => { document.getElementById(id).hidden = !roundOne; });
+      document.getElementById("heroTitle").textContent = roundOne ? "Выберите героя" : "Суд присяжных";
+      document.getElementById("heroPanelText").textContent = roundOne
+        ? "Раунд №1: выберите героя, защиту которого вы выстраиваете (режим адвоката), и героя, обвинение которого вы продумываете (режим прокурора). Можно менять выбор в любой момент. Раунд №2: нажимайте «Судить героя», чтобы открыть голосование за выбранного персонажа."
+        : "Раунд №2: под каждым персонажем нажмите «Судить героя», чтобы перейти к голосованию по его защите. Средние баллы и таблица обновляются автоматически.";
+      renderHeroPanel();
       ["hostActionsCourt", "hostActionsJury"].forEach((id) => {
         const box = document.getElementById(id);
         box.hidden = roundOne || !net.isHost;
@@ -1072,7 +1077,9 @@
     let advocateTeam = null;
     const NEED_HERO = "Сначала выберите героя в блоке «Выберите героя».";
     const choice = { defend: localStorage.getItem("courtDefend"), prosecute: localStorage.getItem("courtProsecute") };
+    let juryTarget = localStorage.getItem("courtJuryTarget");
     for (const key of Object.keys(choice)) if (!players.includes(choice[key])) choice[key] = null;
+    if (!players.includes(juryTarget)) juryTarget = null;
 
     function openAdvocate() {
       if (!choice.defend) { document.getElementById("heroMessage").textContent = NEED_HERO; return; }
@@ -1095,6 +1102,13 @@
       if (kind === "defend") openAdvocate(); else openProsecutor();
     }
 
+    function openJury(player) {
+      juryTarget = player;
+      localStorage.setItem("courtJuryTarget", player);
+      syncJuryForm();
+      showScreen("jury");
+    }
+
     function buildHeroPanel() {
       const grid = document.getElementById("heroGrid");
       grid.replaceChildren();
@@ -1112,7 +1126,11 @@
         prosecute.type = "button";
         prosecute.className = "mode-button choose-prosecute";
         prosecute.addEventListener("click", () => chooseHero("prosecute", player));
-        card.append(title, defend, prosecute);
+        const judge = document.createElement("button");
+        judge.type = "button";
+        judge.className = "mode-button choose-judge";
+        judge.addEventListener("click", () => openJury(player));
+        card.append(title, defend, prosecute, judge);
         grid.append(card);
       }
       renderHeroPanel();
@@ -1121,12 +1139,19 @@
     function renderHeroPanel() {
       for (const player of players) {
         const card = document.getElementById(`hero-card-${player}`);
+        if (!card) continue;
         card.classList.toggle("mine", choice.defend === player);
+        const roundOne = round === 1;
+        card.querySelector(".choose-defend").hidden = !roundOne;
+        card.querySelector(".choose-prosecute").hidden = !roundOne;
+        card.querySelector(".choose-judge").hidden = roundOne;
         card.querySelector(".choose-defend").textContent = choice.defend === player ? "Вы защищаете этого героя" : "Защищать этого героя";
         card.querySelector(".choose-prosecute").textContent = choice.prosecute === player ? "Вы обвиняете этого героя" : "Обвинять этого героя";
+        card.querySelector(".choose-judge").textContent = juryTarget === player ? "Вы судите этого героя" : "Судить героя";
       }
       const message = document.getElementById("heroMessage");
-      if (message.textContent === NEED_HERO && (choice.defend || choice.prosecute)) message.textContent = "";
+      if (round === 1 && message.textContent === NEED_HERO && (choice.defend || choice.prosecute)) message.textContent = "";
+      if (round === 2) message.textContent = juryTarget ? `Вы выбрали голосование за героя: ${names[juryTarget]}.` : "Выберите героя и нажмите «Судить героя».";
     }
 
     let audioCtx = null;
@@ -1470,11 +1495,16 @@
       const state = net.state;
       if (!state) return;
       const locked = state.round !== 2 || state.finalized;
-      const allVotes = criteria.length * players.length;
+      const visiblePlayers = juryTarget && players.includes(juryTarget) ? [juryTarget] : players;
+      const allVotes = criteria.length * visiblePlayers.length;
       let rated = 0;
-      document.getElementById("juryIntro").textContent =
-        "Вы — присяжный. Оцените выступления защиты всех героев. Оценки сохраняются сразу, а средние баллы всех присяжных автоматически появляются в зале суда.";
+      document.getElementById("juryIntro").textContent = juryTarget
+        ? `Вы — присяжный. Оцените защиту героя ${names[juryTarget]}. Оценки сохраняются сразу, а средние баллы автоматически обновляются в зале суда.`
+        : "Вы — присяжный. Выберите героя кнопкой «Судить героя» в зале суда.";
       for (const player of players) {
+        const card = document.getElementById(`vote-total-${player}`)?.closest(".juror-card");
+        if (card) card.hidden = !visiblePlayers.includes(player);
+        if (!visiblePlayers.includes(player)) continue;
         let total = 0;
         let count = 0;
         for (const criterion of criteria) {
@@ -1693,7 +1723,10 @@
       }
     }
 
-    document.getElementById("finishRound1").addEventListener("click", () => hostAction("round", { round: 2 }));
+    document.getElementById("finishRound1").addEventListener("click", async () => {
+      await hostAction("round", { round: 2 });
+      if (round === 2) showScreen("jury");
+    });
     document.querySelectorAll(".finalize-votes").forEach((button) => {
       button.addEventListener("click", () => hostAction("finalize"));
     });
@@ -1702,13 +1735,13 @@
     });
     document.querySelectorAll(".reset-game").forEach((button) => {
       button.addEventListener("click", () => {
-        if (window.confirm("Начать сначала для всех участников? Оценки, имена и распределение по командам будут сброшены.")) hostAction("reset");
+        if (window.confirm("Начать сначала для всех участников? Оценки и выборы героев будут сброшены.")) hostAction("reset");
       });
     });
 
-    applyRound();
     buildJuryForm();
     buildHeroPanel();
+    applyRound();
   </script>
 </body>
 </html>
