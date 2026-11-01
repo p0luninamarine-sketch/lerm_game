@@ -1713,15 +1713,27 @@
     }
 
     async function hostAction(action, body = {}) {
-      try {
-        await api(action, { room: net.room, pid: net.pid, ...body });
-        if (action === "reset") { showScreen("court"); }
-        await pollState();
-      } catch (error) {
-        document.getElementById("resultBanner").textContent = error.message;
-        document.getElementById("juryResult").textContent = error.message;
-      }
+  const help = document.getElementById("courtHelp");
+
+  try {
+    help.textContent = "Выполняется действие...";
+
+    await api(action, {
+      room: net.room,
+      pid: net.pid,
+      ...body
+    });
+
+    await pollState();
+
+    if (action === "round" && round === 2) {
+      help.textContent = "Первый раунд завершён. Началось голосование!";
+      showScreen("jury");
     }
+  } catch (error) {
+    help.textContent = "Ошибка: " + error.message;
+  }
+}
 
     document.getElementById("finishRound1").addEventListener("click", async () => {
       await hostAction("round", { round: 2 });
